@@ -1,0 +1,351 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>数字合体パズル</title>
+    <style>
+        body { margin: 0; padding: 0; overflow: hidden; background-color: #f0f8ff; font-family: 'Arial', sans-serif; }
+        #canvas-container { width: 100vw; height: 100vh; }
+        .controls { position: absolute; top: 10px; left: 10px; z-index: 100; display: flex; gap: 10px; flex-wrap: wrap; }
+        button { font-size: 1rem; padding: 10px 15px; border-radius: 8px; border: none; background: #4CAF50; color: white; cursor: pointer; box-shadow: 0 4px 6px rgba(0,0,0,0.1); transition: transform 0.1s; }
+        button:active { transform: translateY(2px); box-shadow: 0 2px 4px rgba(0,0,0,0.1); }
+        button.reset { background: #FF5722; }
+        button.mode-switch { background: #2196F3; }
+        .instruction { position: absolute; top: 60px; width: 100%; text-align: center; color: #333; pointer-events: none; font-size: 1.5rem; font-weight: bold; user-select: none; text-shadow: 1px 1px 0 #fff; }
+    </style>
+</head>
+<body>
+    <div class="controls">
+        <button class="reset" onclick="resetWorld()">リセット</button>
+        <button class="mode-switch" onclick="toggleMode()">モード切替（現在: 足し算）</button>
+        <button onclick="addBall(1)">1を追加</button>
+        <button onclick="addBall(Math.floor(Math.random() * 5) + 1)">ランダム追加</button>
+    </div>
+    <div class="instruction" id="instruction">ボールをドラッグしてぶつけると足し算されます！</div>
+    <div id="canvas-container"></div>
+
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/matter-js/0.19.0/matter.min.js"></script>
+    <script>
+        // Matter.js モジュールのエイリアス
+        const Engine = Matter.Engine,
+              Render = Matter.Render,
+              Runner = Matter.Runner,
+              Bodies = Matter.Bodies,
+              Composite = Matter.Composite,
+              Mouse = Matter.Mouse,
+              MouseConstraint = Matter.MouseConstraint,
+              Events = Matter.Events,
+              Vector = Matter.Vector;
+
+        // モード管理
+        let currentMode = 'add'; // 'add' or 'subtract'
+
+        function toggleMode() {
+            currentMode = currentMode === 'add' ? 'subtract' : 'add';
+            const btn = document.querySelector('.mode-switch');
+            const instruction = document.getElementById('instruction');
+            
+            if (currentMode === 'add') {
+                btn.textContent = 'モード切替（現在: 足し算）';
+                instruction.textContent = 'ボールをドラッグしてぶつけると足し算されます！';
+                instruction.style.color = '#333';
+                document.body.style.backgroundColor = '#f0f8ff';
+            } else {
+                btn.textContent = 'モード切替（現在: 引き算）';
+                instruction.textContent = 'ボールをドラッグしてぶつけると引き算されます！';
+                instruction.style.color = '#B71C1C';
+                document.body.style.backgroundColor = '#FFF3E0';
+            }
+            resetWorld();
+        }
+
+        // エンジンの作成
+        const engine = Engine.create();
+        const world = engine.world;
+
+        // レンダラーの作成
+        const container = document.getElementById('canvas-container');
+        const render = Render.create({
+            element: container,
+            engine: engine,
+            options: {
+                width: container.clientWidth,
+                height: container.clientHeight,
+                wireframes: false,
+                background: '#f0f8ff'
+            }
+        });
+
+        // 音声処理
+        const AudioContext = window.AudioContext || window.webkitAudioContext;
+        const audioCtx = new AudioContext();
+
+        function playSound(type) {
+            if (audioCtx.state === 'suspended') {
+                audioCtx.resume();
+            }
+            
+            const osc = audioCtx.createOscillator();
+            const gainNode = audioCtx.createGain();
+            
+            osc.connect(gainNode);
+            gainNode.connect(audioCtx.destination);
+            
+            const now = audioCtx.currentTime;
+            
+            if (type === 'merge') {
+                // 合体音: きらめくような音
+                osc.type = 'sine';
+                osc.frequency.setValueAtTime(440, now);
+                osc.frequency.exponentialRampToValueAtTime(880, now + 0.1);
+                
+                gainNode.gain.setValueAtTime(0.3, now);
+                gainNode.gain.exponentialRampToValueAtTime(0.01, now + 0.3);
+                
+                osc.start(now);
+                osc.stop(now + 0.3);
+            } else if (type === 'subtract') {
+                // 引き算音: 縮小するような音
+                osc.type = 'sawtooth';
+                osc.frequency.setValueAtTime(660, now);
+                osc.frequency.exponentialRampToValueAtTime(330, now + 0.2);
+                
+                gainNode.gain.setValueAtTime(0.2, now);
+                gainNode.gain.exponentialRampToValueAtTime(0.01, now + 0.2);
+                
+                osc.start(now);
+                osc.stop(now + 0.2);
+            } else if (type === 'vanish') {
+                // 消滅音: シュン...
+                osc.type = 'square';
+                osc.frequency.setValueAtTime(220, now);
+                osc.frequency.exponentialRampToValueAtTime(55, now + 0.2);
+                
+                gainNode.gain.setValueAtTime(0.2, now);
+                gainNode.gain.exponentialRampToValueAtTime(0.001, now + 0.2);
+                
+                osc.start(now);
+                osc.stop(now + 0.2);
+            } else if (type === 'spawn') {
+                // 出現音: ポッ
+                osc.type = 'triangle';
+                osc.frequency.setValueAtTime(220, now);
+                osc.frequency.linearRampToValueAtTime(100, now + 0.1);
+                
+                gainNode.gain.setValueAtTime(0.2, now);
+                gainNode.gain.exponentialRampToValueAtTime(0.01, now + 0.1);
+                
+                osc.start(now);
+                osc.stop(now + 0.1);
+            }
+        }
+        
+        // 最初のインタラクションでオーディオコンテキストを有効化
+        document.body.addEventListener('click', function() {
+            if (audioCtx.state === 'suspended') {
+                audioCtx.resume();
+            }
+        }, { once: true });
+        document.body.addEventListener('touchstart', function() {
+            if (audioCtx.state === 'suspended') {
+                audioCtx.resume();
+            }
+        }, { once: true });
+
+        // 壁の作成
+        const wallThickness = 60;
+        let walls = [];
+        
+        function createWalls() {
+            const width = container.clientWidth;
+            const height = container.clientHeight;
+            return [
+                Bodies.rectangle(width / 2, -wallThickness/2, width, wallThickness, { isStatic: true }), // 上
+                Bodies.rectangle(width / 2, height + wallThickness/2, width, wallThickness, { isStatic: true }), // 下
+                Bodies.rectangle(width + wallThickness/2, height / 2, wallThickness, height, { isStatic: true }), // 右
+                Bodies.rectangle(-wallThickness/2, height / 2, wallThickness, height, { isStatic: true }) // 左
+            ];
+        }
+        
+        walls = createWalls();
+        Composite.add(world, walls);
+
+        // マウス操作の追加
+        const mouse = Mouse.create(render.canvas);
+        const mouseConstraint = MouseConstraint.create(engine, {
+            mouse: mouse,
+            constraint: {
+                stiffness: 0.2,
+                render: { visible: false }
+            }
+        });
+        Composite.add(world, mouseConstraint);
+        render.mouse = mouse;
+
+        // ボール生成関数
+        function createBall(x, y, value) {
+            // 値に応じて大きさを変える (対数的に大きくするか、線形にするか調整)
+            const radius = 25 + (value * 2); 
+            // 色相を値によって変える
+            const hue = (value * 37) % 360;
+            const color = `hsl(${hue}, 70%, 60%)`;
+            
+            const ball = Bodies.circle(x, y, radius, {
+                restitution: 0.6, // 少し弾む
+                friction: 0.005,
+                density: 0.001 * value, // 重さも少し変える
+                label: 'ball',
+                plugin: { value: value }, // カスタムプロパティとして値を保存
+                render: {
+                    fillStyle: color,
+                    strokeStyle: '#333',
+                    lineWidth: 2
+                }
+            });
+
+            return ball;
+        }
+
+        // カスタムレンダリング（数字の描画）
+        Events.on(render, 'afterRender', function() {
+            const ctx = render.context;
+            const bodies = Composite.allBodies(world);
+
+            // モード表示
+            ctx.font = "bold 80px 'Arial', sans-serif";
+            ctx.textAlign = "center";
+            ctx.textBaseline = "middle";
+            ctx.fillStyle = currentMode === 'add' ? "rgba(76, 175, 80, 0.1)" : "rgba(255, 87, 34, 0.1)";
+            ctx.fillText(currentMode === 'add' ? "たしざん" : "ひきざん", container.clientWidth / 2, container.clientHeight / 2);
+
+            ctx.font = "bold 24px Arial";
+            ctx.textAlign = "center";
+            ctx.textBaseline = "middle";
+            ctx.shadowBlur = 4;
+
+            bodies.forEach(body => {
+                if (body.label === 'ball' && body.plugin.value) {
+                    ctx.save();
+                    ctx.translate(body.position.x, body.position.y);
+                    ctx.rotate(body.angle);
+                    
+                    // 引き算モードなら赤、それ以外は白
+                    ctx.fillStyle = currentMode === 'add' ? "#fff" : "#FF5722";
+                    ctx.shadowColor = currentMode === 'add' ? "rgba(0,0,0,0.5)" : "rgba(255,255,255,0.8)";
+                    
+                    ctx.fillText(body.plugin.value, 0, 0);
+                    ctx.restore();
+                }
+            });
+            ctx.shadowBlur = 0;
+        });
+
+        // 処理済みペアを記録するSet（1フレーム内での重複処理防止）
+        let processedPairs = new Set();
+
+        Events.on(engine, 'beforeUpdate', function() {
+            processedPairs.clear();
+        });
+
+        // 衝突判定と合体処理
+        Events.on(engine, 'collisionStart', function(event) {
+            const pairs = event.pairs;
+
+            for (let i = 0; i < pairs.length; i++) {
+                const bodyA = pairs[i].bodyA;
+                const bodyB = pairs[i].bodyB;
+
+                // 両方がボールである場合のみ処理
+                if (bodyA.label === 'ball' && bodyB.label === 'ball') {
+                    const idPair = [bodyA.id, bodyB.id].sort().join('-');
+                    
+                    if (processedPairs.has(idPair)) continue;
+                    processedPairs.add(idPair);
+
+                    // どちらかがマウスでドラッグされているか、あるいはある程度の勢いでぶつかった場合のみ合体？
+                    // 今回はシンプルに「接触したら合体」にするが、
+                    // 削除済みチェックを行う
+                    
+                    // 次のイベントループで処理（物理演算の安定性のため）
+                    setTimeout(() => {
+                        const bodyAExists = Composite.get(world, bodyA.id, 'body');
+                        const bodyBExists = Composite.get(world, bodyB.id, 'body');
+
+                        if (bodyAExists && bodyBExists) {
+                            const valA = bodyA.plugin.value;
+                            const valB = bodyB.plugin.value;
+                            let newValue;
+
+                            if (currentMode === 'add') {
+                                newValue = valA + valB;
+                            } else {
+                                // 引き算モード: 大きい方から小さい方を引く
+                                newValue = Math.abs(valA - valB);
+                            }
+                            
+                            // 合体後の位置（中間地点）
+                            const newX = (bodyA.position.x + bodyB.position.x) / 2;
+                            const newY = (bodyA.position.y + bodyB.position.y) / 2;
+
+                            // 古いボールを削除
+                            Composite.remove(world, bodyA);
+                            Composite.remove(world, bodyB);
+
+                            // 新しいボールを追加 (0の場合は消滅)
+                            if (newValue > 0) {
+                                const newBall = createBall(newX, newY, newValue);
+                                Composite.add(world, newBall);
+                                playSound(currentMode === 'add' ? 'merge' : 'subtract');
+                            } else {
+                                playSound('vanish');
+                            }
+                        }
+                    }, 0);
+                }
+            }
+        });
+
+        // 初期ボール配置
+        function resetWorld() {
+            Composite.clear(world);
+            Composite.add(world, walls);
+            Composite.add(world, mouseConstraint);
+            
+            // 1〜3のボールをランダムに配置
+            for (let i = 0; i < 6; i++) {
+                const x = Math.random() * (container.clientWidth - 100) + 50;
+                const y = Math.random() * (container.clientHeight / 2) + 50;
+                const value = Math.floor(Math.random() * 3) + 1;
+                Composite.add(world, createBall(x, y, value));
+            }
+        }
+
+        function addBall(val) {
+             const x = Math.random() * (container.clientWidth - 100) + 50;
+             const y = 50;
+             Composite.add(world, createBall(x, y, val));
+             playSound('spawn');
+        }
+
+        // 初期化
+        resetWorld();
+
+        // 実行開始
+        Render.run(render);
+        const runner = Runner.create();
+        Runner.run(runner, engine);
+
+        // リサイズ対応
+        window.addEventListener('resize', () => {
+            render.canvas.width = window.innerWidth;
+            render.canvas.height = window.innerHeight;
+            
+            // 壁の再配置
+            Composite.remove(world, walls);
+            walls = createWalls();
+            Composite.add(world, walls);
+        });
+    </script>
+</body>
+</html>
